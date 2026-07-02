@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import concurrent.futures
+import logging
 
 from temporalio.client import Client
 from temporalio.contrib.pydantic import pydantic_data_converter
@@ -35,6 +36,16 @@ from skills.money_transfer.workflow import MoneyTransferWorkflow
 
 
 async def main() -> None:
+    # Simple stdout logging so the activity/workflow loggers (activity.logger,
+    # workflow.logger) are visible — you can watch plan/withdraw/deposit/refund
+    # execute, plus deposit retries. INFO is a good default; raise to WARNING to
+    # quiet it down. (No interceptor needed; the activities already log.)
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s  %(levelname)-5s  %(name)s: %(message)s",
+        datefmt="%H:%M:%S",
+    )
+
     bank.seed()  # ensure the demo bank exists (idempotent)
 
     client = await Client.connect(

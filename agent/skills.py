@@ -123,6 +123,25 @@ TOOLS: list[dict[str, Any]] = [
             "required": ["source_account", "target_account", "amount_dollars"],
         },
     },
+    {
+        "name": "cancel_transfer",
+        "description": (
+            "Cancel the transfer that is currently awaiting the customer's "
+            "approval — call this when the customer says to cancel, decline, stop, "
+            "or not go ahead with it. It declines the pending transfer; NO money "
+            "moves. It can only decline, never approve or complete a transfer. "
+            "Only meaningful while a transfer is awaiting approval."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "reason": {
+                    "type": "string",
+                    "description": "Optional reason the customer gave for cancelling.",
+                }
+            },
+        },
+    },
 ]
 
 
@@ -174,6 +193,43 @@ async def dispatch_tool(
         )
 
     if name == "initiate_transfer":
+        # Enforce one-transfer-at-a-time here, deterministically, instead of
+        # relying on the model to judge it from the chat history (it tends to
+        # think a resolved card is still pending). Check the pending transfer's
+        # real status and clear it if it has already settled.
+        pending = session.pending_reference_id
+        if pending:
+            try:
+                pending_status = (await transfer.get_state(pending)).get("status")
+            except Exception:  # noqa: BLE001 - workflow gone: treat as settled
+                pending_status = None
+            if pending_status == "awaiting_approval":
+                return ToolOutcome(
+                    result={
+                        "status": "already_pending",
+                        "reference_id": pending,
+                        "detail": (
+                            f"A transfer (reference {pending}) is already awaiting "
+                            f"the customer's approval. Ask them to approve or "
+                            f"decline it, or call cancel_transfer, before starting "
+                            f"a new one."
+                        ),
+                    }
+                )
+            if pending_status in {"validating", "executing", "compensating"}:
+                return ToolOutcome(
+                    result={
+                        "status": "in_progress",
+                        "reference_id": pending,
+                        "detail": (
+                            f"A transfer (reference {pending}) is still processing; "
+                            f"wait for it to finish before starting another."
+                        ),
+                    }
+                )
+            # Terminal or unknown: the pending reference is stale — clear it.
+            session.pending_reference_id = None
+
         reference_id = uuid.uuid4().hex[:12]
         request = TransferRequest(
             source_account=tool_input["source_account"],
@@ -205,6 +261,36 @@ async def dispatch_tool(
                 "plan": plan,
             }
         return ToolOutcome(result=result_for_model, ui_event=ui_event)
+
+    if name == "cancel_transfer":
+        reference_id = session.pending_reference_id
+        if not reference_id:
+            return ToolOutcome(
+                result={
+                    "status": "nothing_to_cancel",
+                    "detail": "There is no transfer awaiting approval to cancel.",
+                }
+            )
+        # Declining moves no money, so the model may do this on the customer's
+        # word — unlike approval, which requires the human card tap.
+        outcome = await transfer.submit_decision(
+            reference_id, approved=False, reason=tool_input.get("reason", "")
+        )
+        session.pending_reference_id = None
+        result = outcome["result"]
+        return ToolOutcome(
+            result={
+                "status": result.get("status", "declined"),
+                "reference_id": reference_id,
+                "detail": "The transfer was cancelled. No money moved.",
+            },
+            # Settle the card in the UI too, in case it's still on screen.
+            ui_event={
+                "type": "transfer_settled",
+                "reference_id": reference_id,
+                "result": result,
+            },
+        )
 
     return ToolOutcome(result={"error": f"Unknown tool {name!r}"})
 

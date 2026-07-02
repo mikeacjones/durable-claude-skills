@@ -62,8 +62,10 @@ def _text_of(content_blocks: list[Any]) -> str:
 
 
 _NO_PENDING_NOTE = (
-    "CURRENT TRANSFER STATE: No transfer is awaiting approval. If the customer "
-    "wants to transfer, start one with initiate_transfer."
+    "CURRENT TRANSFER STATE (authoritative — trust this over the chat history): No "
+    "transfer is awaiting approval. Any confirmation card earlier in this chat is "
+    "already resolved; do NOT claim a transfer is still pending. If the customer "
+    "wants to transfer, call initiate_transfer to start a new one."
 )
 
 
@@ -90,11 +92,20 @@ async def _transfer_state_note(session: Session) -> str:
     if status == "awaiting_approval":
         return (
             f"CURRENT TRANSFER STATE: Transfer {ref} is awaiting the customer's "
-            f"approval on the confirmation card. Do NOT start another transfer "
-            f"until it is approved or declined."
+            f"approval on the confirmation card. Remind them to approve or decline "
+            f"it; if they want to change or drop it, call cancel_transfer. "
+            f"(initiate_transfer will refuse while this one is pending.)"
         )
 
-    # Any other status is terminal: the transfer is done, nothing is pending.
+    if status not in _TERMINAL_STATUSES:
+        # Mid-flight (validating / executing / compensating): not awaiting a human,
+        # but not finished either. Keep it pending; don't start another.
+        return (
+            f"CURRENT TRANSFER STATE: Transfer {ref} is in progress "
+            f"(status: {status}); wait for it to finish before starting another."
+        )
+
+    # Terminal: the transfer is done, nothing is pending.
     session.pending_reference_id = None
     return (
         f"CURRENT TRANSFER STATE: The most recent transfer ({ref}) has settled "

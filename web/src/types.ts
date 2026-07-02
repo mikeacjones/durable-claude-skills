@@ -19,7 +19,16 @@ export interface TransferPlanEvent {
   plan: TransferPlanView | null;
 }
 
-export type AgentEvent = TransferPlanEvent;
+// Emitted when a transfer settles outside the confirmation card — e.g. the
+// customer asked the assistant to cancel it in chat — so the UI can update the
+// (possibly still-visible) card.
+export interface TransferSettledEvent {
+  type: "transfer_settled";
+  reference_id: string;
+  result: TransferResult;
+}
+
+export type AgentEvent = TransferPlanEvent | TransferSettledEvent;
 
 export interface ChatResponse {
   session_id: string;

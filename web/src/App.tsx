@@ -8,7 +8,13 @@ import {
   fetchTransferState,
   sendMessage,
 } from "./api";
-import type { Account, ChatItem, Transaction, TransferPlanEvent } from "./types";
+import type {
+  Account,
+  ChatItem,
+  Transaction,
+  TransferPlanEvent,
+  TransferResult,
+} from "./types";
 import {
   clearPendingRef,
   getPendingRef,
@@ -148,6 +154,8 @@ export default function App() {
       if (res.text) {
         additions.push({ kind: "message", id: newId(), role: "assistant", text: res.text });
       }
+      // Transfers settled out-of-band (e.g. cancelled from chat) — update their card.
+      const settled: Record<string, TransferResult> = {};
       for (const event of res.events) {
         if (event.type === "transfer_plan" && event.status === "awaiting_approval") {
           additions.push({
@@ -158,9 +166,19 @@ export default function App() {
           });
           // Remember it so a page reload can reconnect to this workflow's card.
           setPendingRef(event.reference_id);
+        } else if (event.type === "transfer_settled") {
+          settled[event.reference_id] = event.result;
+          clearPendingRef();
         }
       }
-      setItems((prev) => [...prev, ...additions]);
+      setItems((prev) => {
+        const updated = prev.map((it) =>
+          it.kind === "transfer" && settled[it.event.reference_id]
+            ? { ...it, state: "settled" as const, result: settled[it.event.reference_id] }
+            : it
+        );
+        return [...updated, ...additions];
+      });
     } catch {
       setOffline(true);
       setItems((prev) => [

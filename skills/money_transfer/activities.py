@@ -36,6 +36,13 @@ def build_transfer_plan(request: TransferRequest) -> TransferPlan:
     the agent can explain them in plain language. We do not raise for these; an
     invalid plan is a normal, expected outcome, not a workflow failure.
     """
+    activity.logger.info(
+        "Planning transfer ref=%s: %s -> %s, %d cents",
+        request.reference_id,
+        request.source_account,
+        request.target_account,
+        request.amount_cents,
+    )
     problems = bank.validate_transfer(
         request.source_account, request.target_account, request.amount_cents
     )
@@ -64,6 +71,12 @@ def build_transfer_plan(request: TransferRequest) -> TransferPlan:
 @activity.defn
 def withdraw(input: LedgerInput) -> str:
     """Debit the source account. Raises a non-retryable error if it cannot."""
+    activity.logger.info(
+        "Withdrawing %d cents from %s (ref=%s)",
+        input.amount_cents,
+        input.account_id,
+        input.reference_id,
+    )
     txn_id = bank.withdraw(
         account_id=input.account_id,
         amount_cents=input.amount_cents,
@@ -81,6 +94,13 @@ def deposit(input: LedgerInput) -> str:
     A closed (or otherwise non-active) destination fails here — after the source
     has already been debited — so the workflow's saga rolls the withdrawal back.
     """
+    activity.logger.info(
+        "Depositing %d cents to %s (ref=%s, attempt %d)",
+        input.amount_cents,
+        input.account_id,
+        input.reference_id,
+        activity.info().attempt,
+    )
     account = bank.get_account(input.account_id)
 
     # Demo: simulate a flaky-but-recoverable destination by failing the first
@@ -117,6 +137,12 @@ def deposit(input: LedgerInput) -> str:
 @activity.defn
 def refund(input: LedgerInput) -> str | None:
     """Compensation: return a withdrawal to the source. No-op if nothing was withdrawn."""
+    activity.logger.info(
+        "Refunding %d cents to %s (ref=%s)",
+        input.amount_cents,
+        input.account_id,
+        input.reference_id,
+    )
     txn_id = bank.refund(
         account_id=input.account_id,
         amount_cents=input.amount_cents,
